@@ -171,7 +171,8 @@ public abstract class NettyRemotingAbstract {
 
                         final RemotingCommand response = pair.getObject1().processRequest(ctx, cmd);
                         if (rpcHook != null) {
-                            rpcHook.doAfterResponse(cmd, response);
+                            rpcHook.doAfterResponse(RemotingHelper.parseChannelRemoteAddr(ctx.channel()),
+                                cmd, response);
                         }
 
                         // Oneway形式忽略应答结果

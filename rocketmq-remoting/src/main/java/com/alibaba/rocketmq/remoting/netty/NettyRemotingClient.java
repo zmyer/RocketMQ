@@ -624,7 +624,8 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
                 }
                 RemotingCommand response = this.invokeSyncImpl(channel, request, timeoutMillis);
                 if (this.rpcHook != null) {
-                    this.rpcHook.doAfterResponse(request, response);
+                    this.rpcHook.doAfterResponse(RemotingHelper.parseChannelRemoteAddr(channel),
+                        request, response);
                 }
                 return response;
             }

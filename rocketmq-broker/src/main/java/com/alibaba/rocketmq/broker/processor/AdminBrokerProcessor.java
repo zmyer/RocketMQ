@@ -15,17 +15,9 @@
  */
 package com.alibaba.rocketmq.broker.processor;
 
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandlerContext;
-
 import java.io.UnsupportedEncodingException;
 import java.net.UnknownHostException;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.Map;
-import java.util.Properties;
-import java.util.Set;
+import java.util.*;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,46 +39,13 @@ import com.alibaba.rocketmq.common.message.MessageId;
 import com.alibaba.rocketmq.common.message.MessageQueue;
 import com.alibaba.rocketmq.common.protocol.RequestCode;
 import com.alibaba.rocketmq.common.protocol.ResponseCode;
-import com.alibaba.rocketmq.common.protocol.body.Connection;
-import com.alibaba.rocketmq.common.protocol.body.ConsumerConnection;
-import com.alibaba.rocketmq.common.protocol.body.GroupList;
-import com.alibaba.rocketmq.common.protocol.body.KVTable;
-import com.alibaba.rocketmq.common.protocol.body.LockBatchRequestBody;
-import com.alibaba.rocketmq.common.protocol.body.LockBatchResponseBody;
-import com.alibaba.rocketmq.common.protocol.body.ProducerConnection;
-import com.alibaba.rocketmq.common.protocol.body.QueryConsumeTimeSpanBody;
-import com.alibaba.rocketmq.common.protocol.body.QueryCorrectionOffsetBody;
-import com.alibaba.rocketmq.common.protocol.body.QueueTimeSpan;
-import com.alibaba.rocketmq.common.protocol.body.TopicList;
-import com.alibaba.rocketmq.common.protocol.body.UnlockBatchRequestBody;
-import com.alibaba.rocketmq.common.protocol.header.CloneGroupOffsetRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.ConsumeMessageDirectlyResultRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.CreateTopicRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.DeleteSubscriptionGroupRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.DeleteTopicRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.GetAllTopicConfigResponseHeader;
-import com.alibaba.rocketmq.common.protocol.header.GetBrokerConfigResponseHeader;
-import com.alibaba.rocketmq.common.protocol.header.GetConsumeStatsRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.GetConsumerConnectionListRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.GetConsumerRunningInfoRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.GetConsumerStatusRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.GetEarliestMsgStoretimeRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.GetEarliestMsgStoretimeResponseHeader;
-import com.alibaba.rocketmq.common.protocol.header.GetMaxOffsetRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.GetMaxOffsetResponseHeader;
-import com.alibaba.rocketmq.common.protocol.header.GetMinOffsetRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.GetMinOffsetResponseHeader;
-import com.alibaba.rocketmq.common.protocol.header.GetProducerConnectionListRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.GetTopicStatsInfoRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.QueryConsumeTimeSpanRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.QueryCorrectionOffsetHeader;
-import com.alibaba.rocketmq.common.protocol.header.QueryTopicConsumeByWhoRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.ResetOffsetRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.SearchOffsetRequestHeader;
-import com.alibaba.rocketmq.common.protocol.header.SearchOffsetResponseHeader;
+import com.alibaba.rocketmq.common.protocol.body.*;
+import com.alibaba.rocketmq.common.protocol.header.*;
 import com.alibaba.rocketmq.common.protocol.header.filtersrv.RegisterFilterServerRequestHeader;
 import com.alibaba.rocketmq.common.protocol.header.filtersrv.RegisterFilterServerResponseHeader;
 import com.alibaba.rocketmq.common.protocol.heartbeat.SubscriptionData;
+import com.alibaba.rocketmq.common.stats.StatsItem;
+import com.alibaba.rocketmq.common.stats.StatsSnapshot;
 import com.alibaba.rocketmq.common.subscription.SubscriptionGroupConfig;
 import com.alibaba.rocketmq.remoting.common.RemotingHelper;
 import com.alibaba.rocketmq.remoting.exception.RemotingCommandException;
@@ -96,6 +55,9 @@ import com.alibaba.rocketmq.remoting.protocol.RemotingCommand;
 import com.alibaba.rocketmq.remoting.protocol.RemotingSerializable;
 import com.alibaba.rocketmq.store.DefaultMessageStore;
 import com.alibaba.rocketmq.store.SelectMapedBufferResult;
+
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandlerContext;
 
 
 /**
@@ -221,11 +183,70 @@ public class AdminBrokerProcessor implements NettyRequestProcessor {
         case RequestCode.CLONE_GROUP_OFFSET:
             return this.cloneGroupOffset(ctx, request);
 
+            // 查看Broker统计信息
+        case RequestCode.VIEW_BROKER_STATS_DATA:
+            return ViewBrokerStatsData(ctx, request);
         default:
             break;
         }
 
         return null;
+    }
+
+
+    private RemotingCommand ViewBrokerStatsData(ChannelHandlerContext ctx, RemotingCommand request)
+            throws RemotingCommandException {
+        final ViewBrokerStatsDataRequestHeader requestHeader =
+                (ViewBrokerStatsDataRequestHeader) request
+                    .decodeCommandCustomHeader(ViewBrokerStatsDataRequestHeader.class);
+        final RemotingCommand response = RemotingCommand.createResponseCommand(null);
+        DefaultMessageStore messageStore = (DefaultMessageStore) this.brokerController.getMessageStore();
+
+        StatsItem statsItem =
+                messageStore.getBrokerStatsManager().getStatsItem(requestHeader.getStatsName(),
+                    requestHeader.getStatsKey());
+        if (null == statsItem) {
+            response.setCode(ResponseCode.SYSTEM_ERROR);
+            response.setRemark(String.format("The stats <%s> <%s> not exist", requestHeader.getStatsName(),
+                requestHeader.getStatsKey()));
+            return response;
+        }
+
+        BrokerStatsData brokerStatsData = new BrokerStatsData();
+        // 分钟
+        {
+            BrokerStatsItem it = new BrokerStatsItem();
+            StatsSnapshot ss = statsItem.getStatsDataInMinute();
+            it.setSum(ss.getSum());
+            it.setTps(ss.getTps());
+            it.setAvgpt(ss.getAvgpt());
+            brokerStatsData.setStatsMinute(it);
+        }
+
+        // 小时
+        {
+            BrokerStatsItem it = new BrokerStatsItem();
+            StatsSnapshot ss = statsItem.getStatsDataInHour();
+            it.setSum(ss.getSum());
+            it.setTps(ss.getTps());
+            it.setAvgpt(ss.getAvgpt());
+            brokerStatsData.setStatsHour(it);
+        }
+
+        // 天
+        {
+            BrokerStatsItem it = new BrokerStatsItem();
+            StatsSnapshot ss = statsItem.getStatsDataInDay();
+            it.setSum(ss.getSum());
+            it.setTps(ss.getTps());
+            it.setAvgpt(ss.getAvgpt());
+            brokerStatsData.setStatsDay(it);
+        }
+
+        response.setBody(brokerStatsData.encode());
+        response.setCode(ResponseCode.SUCCESS);
+        response.setRemark(null);
+        return response;
     }
 
 
@@ -364,9 +385,15 @@ public class AdminBrokerProcessor implements NettyRequestProcessor {
 
         ConsumeStats consumeStats = new ConsumeStats();
 
-        Set<String> topics =
-                this.brokerController.getConsumerOffsetManager().whichTopicByConsumer(
-                    requestHeader.getConsumerGroup());
+        Set<String> topics = new HashSet<String>();
+        if (UtilAll.isBlank(requestHeader.getTopic())) {
+            topics =
+                    this.brokerController.getConsumerOffsetManager().whichTopicByConsumer(
+                        requestHeader.getConsumerGroup());
+        }
+        else {
+            topics.add(requestHeader.getTopic());
+        }
 
         for (String topic : topics) {
             TopicConfig topicConfig = this.brokerController.getTopicConfigManager().selectTopicConfig(topic);
@@ -519,7 +546,7 @@ public class AdminBrokerProcessor implements NettyRequestProcessor {
             return response;
         }
 
-        response.setCode(ResponseCode.SUBSCRIPTION_GROUP_NOT_EXIST);
+        response.setCode(ResponseCode.CONSUMER_NOT_ONLINE);
         response.setRemark("the consumer group[" + requestHeader.getConsumerGroup() + "] not online");
         return response;
     }
