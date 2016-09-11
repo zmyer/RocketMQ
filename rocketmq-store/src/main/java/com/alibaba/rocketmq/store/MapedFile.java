@@ -435,4 +435,9 @@ public class MapedFile extends ReferenceResource {
     public String toString() {
         return this.fileName;
     }
+
+    /**
+     * @author zhouwei
+     *
+     */
 }
